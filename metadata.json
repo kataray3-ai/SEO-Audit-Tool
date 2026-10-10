@@ -1,0 +1,6 @@
+{
+  "name": "SEO Audit Pro AI",
+  "description": "Comprehensive AI-powered website SEO audit platform delivering technical, on-page, performance, architecture, and schema intelligence with actionable roadmap recommendations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

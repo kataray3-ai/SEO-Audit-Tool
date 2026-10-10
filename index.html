@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function() {
+        try {
+          var _origFetch = window.fetch;
+          var _currentFetch = function() {
+            return _origFetch.apply(window, arguments);
+          };
+          Object.defineProperty(window, 'fetch', {
+            configurable: true,
+            enumerable: true,
+            get: function() {
+              return _currentFetch;
+            },
+            set: function(fn) {
+              _currentFetch = fn;
+            }
+          });
+        } catch (e) {}
+      })();
+    </script>
+    <title>SEO Audit Pro AI</title>
+    <meta name="description" content="Comprehensive AI-powered website SEO audit platform delivering technical, on-page, performance, architecture, and schema intelligence with actionable roadmap recommendations." />
+    <meta property="og:title" content="SEO Audit Pro AI" />
+    <meta property="og:description" content="Comprehensive AI-powered website SEO audit platform delivering technical, on-page, performance, architecture, and schema intelligence with actionable roadmap recommendations." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

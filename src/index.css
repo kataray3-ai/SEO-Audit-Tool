@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@media print {
+  @page {
+    size: auto;
+    margin: 12mm;
+  }
+
+  /* Force background colors and badges to print faithfully in PDF */
+  *,
+  *::before,
+  *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  aside,
+  header,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  body,
+  html {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  main {
+    background-color: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
+
+  /* Prevent awkward page breaks inside cards, tables, and recommendation items */
+  .print-avoid-break {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .print-page-break {
+    break-before: page !important;
+    page-break-before: always !important;
+  }
+
+  /* Ensure clean printing without link annotations */
+  a[href]:after {
+    content: none !important;
+  }
+}
