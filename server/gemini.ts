@@ -81,8 +81,8 @@ Every recommendation must directly reference the verified findings and evidence.
 Provide realistic code examples (such as correct HTML head tags, JSON-LD, robots.txt, or redirect rules).
 Do not make exaggerated ranking guarantees. Include beginner and technical implementation steps.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+      const apiPromise = ai.models.generateContent({
+        model: 'gemini-2.5-flash',
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
@@ -149,6 +149,12 @@ Do not make exaggerated ranking guarantees. Include beginner and technical imple
           },
         },
       });
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Gemini API request timed out after 6000ms')), 6000)
+      );
+
+      const response = await Promise.race([apiPromise, timeoutPromise]);
 
       const parsed = JSON.parse(response.text?.trim() || '[]');
       if (Array.isArray(parsed) && parsed.length > 0) {

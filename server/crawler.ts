@@ -87,7 +87,7 @@ export async function fetchAndParseRobotsTxt(rootUrl: string): Promise<RobotsTxt
 
       if (lower.startsWith('user-agent:')) {
         const ua = lower.substring(11).trim();
-        appliesToBot = ua === '*' || ua.includes('bot');
+        appliesToBot = ua === '*' || ua.toLowerCase() === 'seoauditprobot';
         continue;
       }
 
@@ -150,8 +150,8 @@ export async function discoverSitemaps(rootUrl: string, declaredSitemaps: string
 
   for (const candidate of uniqueCandidates) {
     try {
-      const res = await safeFetch(candidate, { timeoutMs: 8000, maxBytes: 2 * 1024 * 1024 });
-      if (res.statusCode >= 200 && res.statusCode < 300 && res.body.includes('<urlset') || res.body.includes('<sitemapindex')) {
+      const res = await safeFetch(candidate, { timeoutMs: 3500, maxBytes: 2 * 1024 * 1024 });
+      if (res.statusCode >= 200 && res.statusCode < 300 && (res.body.includes('<urlset') || res.body.includes('<sitemapindex'))) {
         found = true;
         const $ = cheerio.load(res.body, { xmlMode: true });
 
@@ -165,7 +165,7 @@ export async function discoverSitemaps(rootUrl: string, declaredSitemaps: string
         if (subSitemaps.length > 0) {
           for (const sub of subSitemaps.slice(0, 3)) {
             try {
-              const subRes = await safeFetch(sub, { timeoutMs: 6000, maxBytes: 1024 * 1024 });
+              const subRes = await safeFetch(sub, { timeoutMs: 3000, maxBytes: 1024 * 1024 });
               if (subRes.statusCode === 200) {
                 const sub$ = cheerio.load(subRes.body, { xmlMode: true });
                 sub$('urlset > url > loc').each((_, el) => {
@@ -519,12 +519,17 @@ export async function executeCrawl(
     // Domain check
     try {
       const parsedTarget = new URL(targetUrl);
-      if (config.same_domain_only && parsedTarget.hostname !== rootHostname) {
+      const isSameDomain = (h1: string, h2: string) => {
+        if (h1.toLowerCase() === h2.toLowerCase()) return true;
+        return h1.toLowerCase().replace(/^www\./, '') === h2.toLowerCase().replace(/^www\./, '');
+      };
+
+      if (config.same_domain_only && !isSameDomain(parsedTarget.hostname, rootHostname)) {
         continue;
       }
 
-      // Robots check
-      if (config.respect_robots_txt && robots.exists) {
+      // Robots check (only for sub-pages beyond root URL)
+      if (nextItem.depth > 0 && config.respect_robots_txt && robots.exists) {
         if (isPathBlockedByRobots(parsedTarget.pathname, robots)) {
           continue;
         }
@@ -542,11 +547,28 @@ export async function executeCrawl(
       percent: Math.min(80, 20 + Math.round((crawledPages.length / config.max_pages) * 60)),
     });
 
+    const modernBrowserUa =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+
     try {
-      const res = await safeFetch(targetUrl, {
-        timeoutMs: 10000,
-        userAgent: config.user_agent || 'SEOAuditProBot/1.0 (+https://seoauditpro.ai/bot; crawler)',
-      });
+      let res;
+      try {
+        res = await safeFetch(targetUrl, {
+          timeoutMs: 8000,
+          userAgent: config.user_agent && !config.user_agent.includes('SEOAuditPro') ? config.user_agent : modernBrowserUa,
+        });
+      } catch (initialErr: any) {
+        // If initial fetch on root URL failed with HTTPS, try HTTP fallback
+        if (nextItem.depth === 0 && targetUrl.startsWith('https://')) {
+          const httpFallback = targetUrl.replace(/^https:\/\//, 'http://');
+          res = await safeFetch(httpFallback, {
+            timeoutMs: 8000,
+            userAgent: modernBrowserUa,
+          });
+        } else {
+          throw initialErr;
+        }
+      }
 
       const contentType = res.headers['content-type'] || '';
       if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
@@ -579,8 +601,10 @@ export async function executeCrawl(
             queue.length + crawledPages.length < config.max_pages * 3
           ) {
             try {
-              const linkHost = new URL(norm).hostname;
-              if (linkHost === rootHostname) {
+              const linkHost = new URL(norm).hostname.toLowerCase();
+              const cleanLinkHost = linkHost.replace(/^www\./, '');
+              const cleanRootHost = rootHostname.toLowerCase().replace(/^www\./, '');
+              if (cleanLinkHost === cleanRootHost) {
                 queue.push({ url: norm, depth: nextItem.depth + 1 });
               }
             } catch {}

@@ -1,7 +1,5 @@
 import dns from 'dns';
 import { promisify } from 'util';
-import http from 'http';
-import https from 'https';
 
 const lookupAsync = promisify(dns.lookup);
 
@@ -36,7 +34,13 @@ export function isPrivateOrReservedIp(ip: string): boolean {
 
   // IPv6 check
   const lowerIp = ip.toLowerCase();
-  if (lowerIp === '::1' || lowerIp === '::' || lowerIp.startsWith('fe80:') || lowerIp.startsWith('fc00:') || lowerIp.startsWith('fd00:')) {
+  if (
+    lowerIp === '::1' ||
+    lowerIp === '::' ||
+    lowerIp.startsWith('fe80:') ||
+    lowerIp.startsWith('fc00:') ||
+    lowerIp.startsWith('fd00:')
+  ) {
     return true;
   }
 
@@ -54,12 +58,17 @@ export interface UrlValidationResult {
  * Validates a target URL against SSRF attacks and schema constraints
  */
 export async function validatePublicUrl(targetUrl: string): Promise<UrlValidationResult> {
+  if (!targetUrl || typeof targetUrl !== 'string') {
+    return { valid: false, error: 'URL must be a non-empty string.' };
+  }
+
+  let urlToParse = targetUrl.trim();
+  if (!urlToParse.startsWith('http://') && !urlToParse.startsWith('https://')) {
+    urlToParse = 'https://' + urlToParse;
+  }
+
   let parsed: URL;
   try {
-    let urlToParse = targetUrl.trim();
-    if (!urlToParse.startsWith('http://') && !urlToParse.startsWith('https://')) {
-      urlToParse = 'https://' + urlToParse;
-    }
     parsed = new URL(urlToParse);
   } catch (err: any) {
     return { valid: false, error: 'Invalid URL format.' };
@@ -105,9 +114,11 @@ export async function validatePublicUrl(targetUrl: string): Promise<UrlValidatio
     }
   }
 
+  const normalized = parsed.origin + (parsed.pathname === '/' ? '' : parsed.pathname);
+
   return {
     valid: true,
-    normalizedUrl: parsed.origin + (parsed.pathname === '/' ? '' : parsed.pathname),
+    normalizedUrl: normalized,
     hostname,
   };
 }
@@ -140,8 +151,8 @@ export async function safeFetch(
     timeoutMs = 12000,
     maxBytes = 4 * 1024 * 1024, // 4MB maximum
     maxRedirects = 5,
-    userAgent = 'SEOAuditProBot/1.0 (+https://seoauditpro.ai/bot; crawler)',
-    acceptHeader = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 (compatible; SEOAuditPro/1.0; +https://seoauditpro.ai/bot)',
+    acceptHeader = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
   } = options;
 
   let currentUrl = targetUrl;
@@ -154,95 +165,57 @@ export async function safeFetch(
     }
 
     const startTime = Date.now();
-    const parsed = new URL(currentUrl);
-    const transport = parsed.protocol === 'https:' ? https : http;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    const res = await new Promise<{
-      statusCode: number;
-      headers: Record<string, string>;
-      body: string;
-      responseTimeMs: number;
-    }>((resolve, reject) => {
-      let isTimedOut = false;
-      const req = transport.request(
-        parsed,
-        {
-          method: 'GET',
-          headers: {
-            'User-Agent': userAgent,
-            Accept: acceptHeader,
-            'Accept-Encoding': 'gzip, deflate, br',
-            Connection: 'close',
-          },
+    try {
+      const response = await fetch(currentUrl, {
+        method: 'GET',
+        headers: {
+          'User-Agent': userAgent,
+          Accept: acceptHeader,
+          'Accept-Language': 'en-US,en;q=0.9',
+          Connection: 'close',
         },
-        response => {
-          let receivedBytes = 0;
-          const chunks: Buffer[] = [];
-
-          response.on('data', chunk => {
-            receivedBytes += chunk.length;
-            if (receivedBytes > maxBytes) {
-              req.destroy(new Error(`Response exceeded maximum size limit of ${maxBytes} bytes`));
-              return;
-            }
-            chunks.push(chunk);
-          });
-
-          response.on('end', () => {
-            const responseTimeMs = Date.now() - startTime;
-            const headersMap: Record<string, string> = {};
-            for (const [k, v] of Object.entries(response.headers)) {
-              if (typeof v === 'string') {
-                headersMap[k.toLowerCase()] = v;
-              } else if (Array.isArray(v)) {
-                headersMap[k.toLowerCase()] = v.join(', ');
-              }
-            }
-
-            const rawBody = Buffer.concat(chunks).toString('utf-8');
-            resolve({
-              statusCode: response.statusCode || 0,
-              headers: headersMap,
-              body: rawBody,
-              responseTimeMs,
-            });
-          });
-        }
-      );
-
-      const timer = setTimeout(() => {
-        isTimedOut = true;
-        req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-
-      req.on('error', err => {
-        clearTimeout(timer);
-        if (isTimedOut) {
-          reject(new Error(`Timeout: Target server did not respond within ${timeoutMs}ms`));
-        } else {
-          reject(err);
-        }
+        redirect: 'manual',
+        signal: controller.signal,
       });
 
-      req.end();
-    });
+      const responseTimeMs = Date.now() - startTime;
+      const headersMap: Record<string, string> = {};
+      response.headers.forEach((val, key) => {
+        headersMap[key.toLowerCase()] = val;
+      });
 
-    // Check for redirects
-    if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers['location']) {
-      redirectChain.push(currentUrl);
-      const nextUrl = new URL(res.headers['location'], currentUrl).toString();
-      currentUrl = nextUrl;
-      continue;
+      // Check for redirects
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location');
+        if (location) {
+          redirectChain.push(currentUrl);
+          const nextUrl = new URL(location, currentUrl).toString();
+          currentUrl = nextUrl;
+          continue;
+        }
+      }
+
+      const rawText = await response.text();
+
+      return {
+        statusCode: response.status,
+        finalUrl: currentUrl,
+        redirectChain,
+        headers: headersMap,
+        body: rawText.slice(0, maxBytes),
+        responseTimeMs,
+      };
+    } catch (fetchErr: any) {
+      if (fetchErr.name === 'AbortError') {
+        throw new Error(`Request timed out after ${timeoutMs}ms for ${currentUrl}`);
+      }
+      throw fetchErr;
+    } finally {
+      clearTimeout(timer);
     }
-
-    return {
-      statusCode: res.statusCode,
-      finalUrl: currentUrl,
-      redirectChain,
-      headers: res.headers,
-      body: res.body,
-      responseTimeMs: res.responseTimeMs,
-    };
   }
 
   throw new Error(`Too many redirects (exceeded limit of ${maxRedirects})`);

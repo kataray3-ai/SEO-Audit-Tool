@@ -21,9 +21,12 @@ interface AuditContextType {
   toggleDemoMode: (val?: boolean) => void;
   isLoading: boolean;
   error: string | null;
+  activeAuditId: string | null;
+  setActiveAuditId: (id: string | null) => void;
   refreshAuditData: (auditId?: string) => Promise<void>;
   updateIssueStatus: (issueId: string, status: IssueStatus, notes?: string) => Promise<void>;
   startAudit: (config: CrawlConfiguration) => Promise<string>;
+  launchQuickAudit: (rawUrl: string) => Promise<string>;
   switchAudit: (auditId: string) => Promise<void>;
 }
 
@@ -39,6 +42,7 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [isDemoMode, setIsDemoMode] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeAuditId, setActiveAuditId] = useState<string | null>(null);
 
   // Load projects on startup
   useEffect(() => {
@@ -67,7 +71,6 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const loadAudit = async (auditId: string) => {
-    setIsLoading(true);
     setError(null);
     try {
       const [auditRes, pagesRes, issuesRes] = await Promise.all([
@@ -86,10 +89,9 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setCurrentPages(pagesData);
       setCurrentIssues(issuesData);
       setIsDemoMode(Boolean(auditData.is_demo));
+      setActiveProjectId(auditData.project_id);
     } catch (err: any) {
       setError(err.message);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -98,6 +100,7 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (id) {
       await loadAudit(id);
     }
+    await fetchProjects();
   };
 
   const switchAudit = async (auditId: string) => {
@@ -123,29 +126,81 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const startAudit = async (config: CrawlConfiguration): Promise<string> => {
-    setIsLoading(true);
     setError(null);
-    try {
-      const res = await fetch('/api/audits', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...config,
-          project_id: activeProjectId,
-        }),
-      });
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || 'Failed to start audit');
-      }
-
-      const data = await res.json();
-      setIsDemoMode(false);
-      return data.audit_id;
-    } finally {
-      setIsLoading(false);
+    let cleanUrl = config.url.trim();
+    if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+      cleanUrl = 'https://' + cleanUrl;
     }
+
+    // Clear old activeAuditId while creating new one to prevent stale polling
+    setActiveAuditId(null);
+
+    const res = await fetch('/api/audits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...config,
+        url: cleanUrl,
+      }),
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || 'Failed to start audit');
+    }
+
+    const data = await res.json();
+    setActiveAuditId(data.audit_id);
+    if (data.project_id) {
+      setActiveProjectId(data.project_id);
+    }
+    setIsDemoMode(false);
+    await fetchProjects();
+    return data.audit_id;
+  };
+
+  const launchQuickAudit = async (rawUrl: string): Promise<string> => {
+    let cleanUrl = rawUrl.trim();
+    if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+      cleanUrl = 'https://' + cleanUrl;
+    }
+
+    let hostname = 'Website';
+    try {
+      hostname = new URL(cleanUrl).hostname;
+    } catch {}
+
+    const quickConfig: CrawlConfiguration = {
+      url: cleanUrl,
+      project_name: hostname,
+      website_type: 'ecommerce',
+      target_country: 'United States',
+      target_language: 'en-US',
+      primary_market: 'Global',
+      website_platform: 'Custom',
+      target_keywords: [],
+      competitor_urls: [],
+      crawl_source: 'both',
+      max_pages: 15,
+      crawl_depth: 3,
+      same_domain_only: true,
+      respect_robots_txt: true,
+      user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+      request_delay_ms: 200,
+      modules: {
+        technical: true,
+        onpage: true,
+        content: true,
+        performance: true,
+        links: true,
+        schema: true,
+        local: false,
+        competitors: true,
+      },
+    };
+
+    setActiveTab('new_audit');
+    return await startAudit(quickConfig);
   };
 
   const toggleDemoMode = (val?: boolean) => {
@@ -171,9 +226,12 @@ export const AuditProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         toggleDemoMode,
         isLoading,
         error,
+        activeAuditId,
+        setActiveAuditId,
         refreshAuditData,
         updateIssueStatus,
         startAudit,
+        launchQuickAudit,
         switchAudit,
       }}
     >

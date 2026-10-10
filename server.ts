@@ -27,7 +27,7 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = 3000;
   const isProduction = process.env.NODE_ENV === 'production';
 
   app.use(express.json({ limit: '10mb' }));
@@ -119,13 +119,29 @@ async function startServer() {
       return res.status(400).json({ error: validation.error });
     }
 
+    const targetHostname = new URL(validation.normalizedUrl!).hostname;
+
+    // Match existing project by root domain (excluding demo project when domain differs)
+    let matchedProject = store.getProjects().find(p => {
+      try {
+        const root = p.root_url.startsWith('http') ? p.root_url : `https://${p.root_url}`;
+        const h = new URL(root).hostname;
+        return h.toLowerCase() === targetHostname.toLowerCase();
+      } catch {
+        return false;
+      }
+    });
+
+    const projectId = matchedProject
+      ? matchedProject.id
+      : `proj_${Math.random().toString(36).substring(2, 9)}`;
+
     const auditId = `audit_${Math.random().toString(36).substring(2, 9)}`;
-    const projectId = req.body.project_id || `proj_${Math.random().toString(36).substring(2, 9)}`;
 
     const initialAudit: Audit = {
       id: auditId,
       project_id: projectId,
-      project_name: config.project_name || new URL(validation.normalizedUrl!).hostname,
+      project_name: config.project_name || targetHostname,
       root_url: validation.normalizedUrl!,
       status: 'crawling',
       started_at: new Date().toISOString(),
@@ -155,13 +171,12 @@ async function startServer() {
 
     store.saveAudit(initialAudit);
 
-    // Update project stats
-    let project = store.getProject(projectId);
-    if (!project) {
-      project = {
+    // Save or update project
+    if (!matchedProject) {
+      const newProject: Project = {
         id: projectId,
-        name: initialAudit.project_name,
-        root_url: initialAudit.root_url,
+        name: config.project_name || targetHostname,
+        root_url: validation.normalizedUrl!,
         website_type: config.website_type || 'ecommerce',
         target_country: config.target_country || 'United States',
         target_language: config.target_language || 'en-US',
@@ -169,15 +184,17 @@ async function startServer() {
         last_audit_id: auditId,
         audit_count: 1,
       };
-      store.saveProject(project);
+      store.saveProject(newProject);
     } else {
-      project.last_audit_id = auditId;
-      project.audit_count = (project.audit_count || 0) + 1;
+      matchedProject.last_audit_id = auditId;
+      matchedProject.audit_count = (matchedProject.audit_count || 0) + 1;
+      store.saveProject(matchedProject);
     }
 
     // Return response immediately so frontend starts polling / watching progress
     res.status(202).json({
       audit_id: auditId,
+      project_id: projectId,
       status: 'crawling',
       message: 'Audit started successfully',
     });
@@ -246,11 +263,16 @@ async function startServer() {
           percent: 95,
         });
 
-        const recommendations = await generateAIRecommendations(
-          evaluation.issues,
-          crawlResult.pages,
-          config
-        );
+        let recommendations = [];
+        try {
+          recommendations = await generateAIRecommendations(
+            evaluation.issues,
+            crawlResult.pages,
+            config
+          );
+        } catch (recErr: any) {
+          console.warn('AI recommendation generation error:', recErr.message);
+        }
 
         // Calculate issue severity distribution
         const issueCounts = {

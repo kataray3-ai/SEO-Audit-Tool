@@ -16,20 +16,21 @@ import {
   Gauge,
   ArrowRight,
   ArrowLeft,
+  Zap,
 } from 'lucide-react';
 
 export const NewAuditView: React.FC = () => {
-  const { startAudit, refreshAuditData, setActiveTab, currentAudit } = useAudit();
+  const { startAudit, refreshAuditData, setActiveTab, activeAuditId, setActiveAuditId } = useAudit();
 
   const [step, setStep] = useState<number>(1);
   const [inProgress, setInProgress] = useState<boolean>(false);
-  const [activeAuditId, setActiveAuditId] = useState<string | null>(null);
   const [progressState, setProgressState] = useState<AuditCrawlProgress | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [urlInputError, setUrlInputError] = useState<string | null>(null);
 
   // Form configuration state
   const [config, setConfig] = useState<CrawlConfiguration>({
-    url: 'https://',
+    url: '',
     project_name: '',
     website_type: 'ecommerce',
     target_country: 'United States',
@@ -43,8 +44,8 @@ export const NewAuditView: React.FC = () => {
     crawl_depth: 3,
     same_domain_only: true,
     respect_robots_txt: true,
-    user_agent: 'SEOAuditProBot/1.0 (+https://seoauditpro.ai/bot; crawler)',
-    request_delay_ms: 250,
+    user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 (compatible; SEOAuditPro/1.0)',
+    request_delay_ms: 200,
     modules: {
       technical: true,
       onpage: true,
@@ -60,13 +61,23 @@ export const NewAuditView: React.FC = () => {
   const [targetKeywordsText, setTargetKeywordsText] = useState('ultralight backpacking, trail hiking boots, mountain waterproof jacket');
   const [competitorsText, setCompetitorsText] = useState('https://www.rei.com\nhttps://www.patagonia.com');
 
+  // If an audit was triggered (e.g. from Header or Quick Audit), activate progress step
+  useEffect(() => {
+    if (activeAuditId) {
+      setInProgress(true);
+      setStep(5);
+      setErrorMsg(null);
+    }
+  }, [activeAuditId]);
+
   // Poll progress if in progress
   useEffect(() => {
     let timer: any = null;
-    if (inProgress && activeAuditId) {
+    const currentId = activeAuditId;
+    if (inProgress && currentId) {
       timer = setInterval(async () => {
         try {
-          const res = await fetch(`/api/audits/${activeAuditId}/status`);
+          const res = await fetch(`/api/audits/${currentId}/status`);
           if (res.ok) {
             const data = await res.json();
             if (data.progress) {
@@ -75,7 +86,7 @@ export const NewAuditView: React.FC = () => {
             if (data.status === 'completed') {
               setInProgress(false);
               clearInterval(timer);
-              await refreshAuditData(activeAuditId);
+              await refreshAuditData(currentId);
             } else if (data.status === 'failed') {
               setInProgress(false);
               clearInterval(timer);
@@ -92,10 +103,33 @@ export const NewAuditView: React.FC = () => {
     };
   }, [inProgress, activeAuditId]);
 
-  const handleLaunchAudit = async () => {
+  const cleanEnteredUrl = (raw: string): string => {
+    let u = raw.trim();
+    if (!u.startsWith('http://') && !u.startsWith('https://')) {
+      u = 'https://' + u;
+    }
+    return u;
+  };
+
+  const handleLaunchAudit = async (customConfig?: CrawlConfiguration) => {
     setErrorMsg(null);
-    setInProgress(true);
-    setStep(5);
+    setUrlInputError(null);
+
+    const targetUrl = (customConfig || config).url.trim();
+    if (!targetUrl || targetUrl === 'https://') {
+      setUrlInputError('Please enter a valid website URL (e.g. https://example.com or example.com)');
+      return;
+    }
+
+    const normalizedUrl = cleanEnteredUrl(targetUrl);
+    let autoProjectName = (customConfig || config).project_name.trim();
+    if (!autoProjectName) {
+      try {
+        autoProjectName = new URL(normalizedUrl).hostname;
+      } catch {
+        autoProjectName = 'Website';
+      }
+    }
 
     const keywords = targetKeywordsText
       .split(',')
@@ -108,24 +142,29 @@ export const NewAuditView: React.FC = () => {
       .filter(c => c.length > 0);
 
     const finalConfig: CrawlConfiguration = {
-      ...config,
+      ...(customConfig || config),
+      url: normalizedUrl,
+      project_name: autoProjectName,
       target_keywords: keywords,
       competitor_urls: competitors,
     };
 
+    setInProgress(true);
+    setStep(5);
+    setProgressState({
+      step: 'validating',
+      message: 'Validating host eligibility and security parameters...',
+      pages_crawled: 0,
+      total_discovered: 1,
+      percent: 5,
+    });
+
     try {
       const auditId = await startAudit(finalConfig);
       setActiveAuditId(auditId);
-      setProgressState({
-        step: 'validating',
-        message: 'Validating host eligibility and security parameters...',
-        pages_crawled: 0,
-        total_discovered: 1,
-        percent: 5,
-      });
     } catch (err: any) {
       setInProgress(false);
-      setErrorMsg(err.message || 'Failed to start audit');
+      setErrorMsg(err.message || 'Failed to start audit. Please verify the URL.');
     }
   };
 
@@ -168,137 +207,137 @@ export const NewAuditView: React.FC = () => {
 
       {/* STEP 1: Website Details */}
       {step === 1 && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-4">
+        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-5">
           <div>
             <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
               <Globe className="w-5 h-5 text-amber-500" />
               Step 1: Website Details & Target Market
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Specify the target domain, platform, and optional competitor URLs for comparative analysis.
+              Enter any website URL to run an instant comprehensive SEO audit or customize advanced crawl parameters.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+          <div className="space-y-4 pt-1">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
                 Website URL <span className="text-red-500">*</span>
               </label>
-              <input
-                type="url"
-                value={config.url}
-                onChange={e => setConfig({ ...config, url: e.target.value })}
-                placeholder="https://example.com"
-                className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 font-mono focus:ring-2 focus:ring-amber-400 focus:outline-none"
-              />
-              <span className="text-[10px] text-slate-400 mt-1 block">
-                Must be an accessible public domain (SSRF protected).
-              </span>
+              <div className="relative">
+                <Globe className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={config.url}
+                  onChange={e => {
+                    setConfig({ ...config, url: e.target.value });
+                    if (urlInputError) setUrlInputError(null);
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') handleLaunchAudit();
+                  }}
+                  placeholder="https://example.com or example.com"
+                  className={`w-full text-xs border rounded-lg pl-9 pr-3 py-2.5 font-mono focus:ring-2 focus:ring-amber-400 focus:outline-none ${
+                    urlInputError ? 'border-red-400 bg-red-50/20' : 'border-slate-300'
+                  }`}
+                />
+              </div>
+              {urlInputError ? (
+                <span className="text-xs text-red-600 font-medium mt-1.5 block">
+                  {urlInputError}
+                </span>
+              ) : (
+                <span className="text-[11px] text-slate-400 mt-1 block">
+                  Tip: You can enter <strong>example.com</strong> directly or with <strong>https://</strong>.
+                </span>
+              )}
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Project Name</label>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Project Name (Optional)</label>
+                <input
+                  type="text"
+                  value={config.project_name}
+                  onChange={e => setConfig({ ...config, project_name: e.target.value })}
+                  placeholder="e.g. My Website Brand"
+                  className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Business / Website Type</label>
+                <select
+                  value={config.website_type}
+                  onChange={e => setConfig({ ...config, website_type: e.target.value as any })}
+                  className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                >
+                  <option value="ecommerce">E-Commerce Store</option>
+                  <option value="saas">SaaS / B2B Software</option>
+                  <option value="blog">Content Blog / Publication</option>
+                  <option value="local_business">Local Service / Physical Business</option>
+                  <option value="corporate">Corporate / Institutional</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Target Country</label>
+                <input
+                  type="text"
+                  value={config.target_country}
+                  onChange={e => setConfig({ ...config, target_country: e.target.value })}
+                  placeholder="United States"
+                  className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Target Language</label>
+                <input
+                  type="text"
+                  value={config.target_language}
+                  onChange={e => setConfig({ ...config, target_language: e.target.value })}
+                  placeholder="en-US"
+                  className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Target Focus Keywords (optional, comma-separated)
+              </label>
               <input
                 type="text"
-                value={config.project_name}
-                onChange={e => setConfig({ ...config, project_name: e.target.value })}
-                placeholder="e.g. ApexGear Outdoors"
-                className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-400 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Business / Website Type</label>
-              <select
-                value={config.website_type}
-                onChange={e => setConfig({ ...config, website_type: e.target.value as any })}
-                className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-400 focus:outline-none"
-              >
-                <option value="ecommerce">E-Commerce Store</option>
-                <option value="saas">SaaS / B2B Software</option>
-                <option value="blog">Content Blog / Publication</option>
-                <option value="local_business">Local Service / Physical Business</option>
-                <option value="corporate">Corporate / Institutional</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">CMS / Tech Platform</label>
-              <select
-                value={config.website_platform}
-                onChange={e => setConfig({ ...config, website_platform: e.target.value })}
-                className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-400 focus:outline-none"
-              >
-                <option value="Shopify">Shopify</option>
-                <option value="WordPress">WordPress / WooCommerce</option>
-                <option value="Next.js">Next.js / Headless React</option>
-                <option value="Webflow">Webflow</option>
-                <option value="Custom">Custom HTML / Other</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Target Country</label>
-              <input
-                type="text"
-                value={config.target_country}
-                onChange={e => setConfig({ ...config, target_country: e.target.value })}
-                placeholder="United States"
-                className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-400 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Target Language</label>
-              <input
-                type="text"
-                value={config.target_language}
-                onChange={e => setConfig({ ...config, target_language: e.target.value })}
-                placeholder="en-US"
+                value={targetKeywordsText}
+                onChange={e => setTargetKeywordsText(e.target.value)}
+                placeholder="e.g. running shoes, trail gear"
                 className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-400 focus:outline-none"
               />
             </div>
           </div>
 
-          <div className="pt-2">
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              Target Focus Keywords (comma-separated)
-            </label>
-            <input
-              type="text"
-              value={targetKeywordsText}
-              onChange={e => setTargetKeywordsText(e.target.value)}
-              placeholder="keyword 1, keyword 2, keyword 3"
-              className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-400 focus:outline-none"
-            />
-          </div>
-
-          <div className="pt-2">
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              Competitor URLs (one per line, up to 5)
-            </label>
-            <textarea
-              rows={2}
-              value={competitorsText}
-              onChange={e => setCompetitorsText(e.target.value)}
-              placeholder="https://competitor1.com&#10;https://competitor2.com"
-              className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 font-mono focus:ring-2 focus:ring-amber-400 focus:outline-none"
-            />
-          </div>
-
-          <div className="flex justify-end pt-4 border-t border-slate-100">
+          {/* Quick 1-Click Launch Bar vs Advanced Settings */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-slate-100">
             <button
               onClick={() => {
-                if (!config.url || config.url === 'https://') {
-                  alert('Please enter a valid target URL.');
+                if (!config.url.trim()) {
+                  setUrlInputError('Please enter a website URL before continuing.');
                   return;
                 }
                 setStep(2);
               }}
-              className="px-4 py-2 bg-amber-400 text-slate-950 font-bold text-xs rounded-lg hover:bg-amber-500 shadow-xs flex items-center gap-1.5"
+              className="w-full sm:w-auto px-4 py-2 border border-slate-300 text-slate-700 font-bold text-xs rounded-lg hover:bg-slate-50 flex items-center justify-center gap-1.5 cursor-pointer order-2 sm:order-1"
             >
-              Next: Crawl Settings
+              Configure Advanced Crawl Settings
               <ArrowRight className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={() => handleLaunchAudit()}
+              className="w-full sm:w-auto px-6 py-2.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs rounded-lg shadow-sm flex items-center justify-center gap-2 active:scale-98 cursor-pointer order-1 sm:order-2"
+            >
+              <Zap className="w-4 h-4 fill-slate-950" />
+              Start Quick Audit Now
             </button>
           </div>
         </div>
@@ -368,7 +407,7 @@ export const NewAuditView: React.FC = () => {
                 className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-400 focus:outline-none"
               >
                 <option value="100">100 ms (Fast)</option>
-                <option value="250">250 ms (Balanced)</option>
+                <option value="200">200 ms (Balanced)</option>
                 <option value="500">500 ms (Polite)</option>
                 <option value="1000">1,000 ms (Strict throttle)</option>
               </select>
@@ -396,32 +435,22 @@ export const NewAuditView: React.FC = () => {
                 className="rounded text-amber-500 focus:ring-amber-400"
               />
               <span className="text-xs font-medium text-slate-700">
-                Strictly respect /robots.txt disallow directives
+                Respect /robots.txt disallow directives
               </span>
             </label>
-          </div>
-
-          <div className="pt-2">
-            <label className="block text-xs font-bold text-slate-700 mb-1">User-Agent Identifier</label>
-            <input
-              type="text"
-              value={config.user_agent}
-              onChange={e => setConfig({ ...config, user_agent: e.target.value })}
-              className="w-full text-xs border border-slate-300 rounded-lg px-3 py-2 font-mono text-slate-600 focus:ring-2 focus:ring-amber-400 focus:outline-none"
-            />
           </div>
 
           <div className="flex justify-between pt-4 border-t border-slate-100">
             <button
               onClick={() => setStep(1)}
-              className="px-4 py-2 border border-slate-300 text-slate-700 font-bold text-xs rounded-lg hover:bg-slate-50 flex items-center gap-1.5"
+              className="px-4 py-2 border border-slate-300 text-slate-700 font-bold text-xs rounded-lg hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4" />
               Back
             </button>
             <button
               onClick={() => setStep(3)}
-              className="px-4 py-2 bg-amber-400 text-slate-950 font-bold text-xs rounded-lg hover:bg-amber-500 shadow-xs flex items-center gap-1.5"
+              className="px-4 py-2 bg-amber-400 text-slate-950 font-bold text-xs rounded-lg hover:bg-amber-500 shadow-xs flex items-center gap-1.5 cursor-pointer"
             >
               Next: Modules
               <ArrowRight className="w-4 h-4" />
@@ -485,14 +514,14 @@ export const NewAuditView: React.FC = () => {
           <div className="flex justify-between pt-4 border-t border-slate-100">
             <button
               onClick={() => setStep(2)}
-              className="px-4 py-2 border border-slate-300 text-slate-700 font-bold text-xs rounded-lg hover:bg-slate-50 flex items-center gap-1.5"
+              className="px-4 py-2 border border-slate-300 text-slate-700 font-bold text-xs rounded-lg hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4" />
               Back
             </button>
             <button
               onClick={() => setStep(4)}
-              className="px-4 py-2 bg-amber-400 text-slate-950 font-bold text-xs rounded-lg hover:bg-amber-500 shadow-xs flex items-center gap-1.5"
+              className="px-4 py-2 bg-amber-400 text-slate-950 font-bold text-xs rounded-lg hover:bg-amber-500 shadow-xs flex items-center gap-1.5 cursor-pointer"
             >
               Next: Review Scope
               <ArrowRight className="w-4 h-4" />
@@ -518,7 +547,7 @@ export const NewAuditView: React.FC = () => {
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <span className="text-slate-500">Target Root URL:</span>
-                <span className="font-mono font-bold text-slate-900 ml-2">{config.url}</span>
+                <span className="font-mono font-bold text-slate-900 ml-2">{config.url || 'Not set'}</span>
               </div>
               <div>
                 <span className="text-slate-500">Project:</span>
@@ -556,21 +585,17 @@ export const NewAuditView: React.FC = () => {
             </div>
           </div>
 
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 leading-relaxed">
-            <strong>Security Notice:</strong> The crawler enforces strict SSRF protections, disallowing loopback, link-local, and private cloud metadata IPs. Rate limiting is applied to ensure polite server crawling.
-          </div>
-
           <div className="flex justify-between pt-4 border-t border-slate-100">
             <button
               onClick={() => setStep(3)}
-              className="px-4 py-2 border border-slate-300 text-slate-700 font-bold text-xs rounded-lg hover:bg-slate-50 flex items-center gap-1.5"
+              className="px-4 py-2 border border-slate-300 text-slate-700 font-bold text-xs rounded-lg hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4" />
               Back
             </button>
             <button
-              onClick={handleLaunchAudit}
-              className="px-5 py-2.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs rounded-lg shadow-sm flex items-center gap-2 active:scale-98"
+              onClick={() => handleLaunchAudit()}
+              className="px-5 py-2.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs rounded-lg shadow-sm flex items-center gap-2 active:scale-98 cursor-pointer"
             >
               <Play className="w-4 h-4 fill-slate-950" />
               Start Audit Now
@@ -592,7 +617,7 @@ export const NewAuditView: React.FC = () => {
                 <h3 className="text-base font-bold text-slate-900">
                   {progressState?.message || 'Crawl in progress...'}
                 </h3>
-                <p className="text-xs text-slate-500 mt-1 font-mono">
+                <p className="text-xs text-slate-500 mt-1 font-mono truncate max-w-md mx-auto">
                   {progressState?.current_page ? `Target: ${progressState.current_page}` : 'Initializing pipeline'}
                 </p>
               </div>
@@ -645,15 +670,15 @@ export const NewAuditView: React.FC = () => {
               <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
                 <AlertCircle className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-bold text-slate-900">Audit Failed</h3>
+              <h3 className="text-base font-bold text-slate-900">Audit Notice</h3>
               <p className="text-xs text-red-700 bg-red-50 p-3 rounded-lg border border-red-200 text-left font-mono leading-relaxed">
                 {errorMsg}
               </p>
               <button
                 onClick={() => setStep(1)}
-                className="px-4 py-2 bg-slate-900 text-white font-bold text-xs rounded-lg hover:bg-slate-800"
+                className="px-4 py-2 bg-slate-900 text-white font-bold text-xs rounded-lg hover:bg-slate-800 cursor-pointer"
               >
-                Return to Configuration
+                Return to URL Configuration
               </button>
             </div>
           ) : (
@@ -668,15 +693,18 @@ export const NewAuditView: React.FC = () => {
               <div className="flex justify-center gap-3 pt-2">
                 <button
                   onClick={() => setActiveTab('overview')}
-                  className="px-5 py-2.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs rounded-lg shadow-sm"
+                  className="px-5 py-2.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs rounded-lg shadow-sm cursor-pointer"
                 >
                   View Audit Dashboard &rarr;
                 </button>
                 <button
-                  onClick={() => setStep(1)}
-                  className="px-4 py-2 border border-slate-300 text-slate-700 font-bold text-xs rounded-lg hover:bg-slate-50"
+                  onClick={() => {
+                    setConfig({ ...config, url: '' });
+                    setStep(1);
+                  }}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 font-bold text-xs rounded-lg hover:bg-slate-50 cursor-pointer"
                 >
-                  Run Another Crawl
+                  Audit Another Site
                 </button>
               </div>
             </div>
